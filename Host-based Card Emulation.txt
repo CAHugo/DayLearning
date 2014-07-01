@@ -1,0 +1,71 @@
+Host-based Card Emulation
+
+1 When an NFC card is emulated using host-based card emulation, the data is routed to the host CPU on which Android  applications are running directly, instead of routing the NFC protocol frames to a secure element. 
+
+2 Specifically, Android 4.4 supports emulating cards that are based on the NFC-Forum ISO-DEP specification (based on ISO/IEC 14443-4) and process Application Protocol Data Units (APDUs) as defined in the ISO/IEC 7816-4 specification.
+
+3 The HCE architecture in Android is based around Android Service components (known as "HCE services").
+
+4 (1)When the user taps a device to an NFC reader, the Android system needs to know which HCE service the NFC reader actually wants to talk to.
+  (2)This is where the ISO/IEC 7816-4 specification comes in: it defines a way to select applications, centered around an Application ID (AID).  An AID consists of up to 16 bytes.
+
+5 If you want to deploy new reader infrastructure for your own application, you will need to register your own AID(s).
+
+6 Android 4.4 supports two categories: CATEGORY_PAYMENT (covering industry-standard payment apps) and CATEGORY_OTHER (for all other HCE apps).
+
+7 Implementing an HCE Service
+(1)Checking for HCE support:
+   Your application can check whether a device supports HCE by checking for the FEATURE_NFC_HOST_CARD_EMULATION feature. You should use the <uses-feature> tag in the manifest of your application to declare that your app uses the HCE feature, and whether it is required for the app to function or not. 
+(2)Service implementation:
+    1 extend HostApduService(HostApduService declares two abstract methods that need to be overridden and implemented.)
+    2 processCommandApdu() is called whenever a NFC reader sends an Application Protocol Data Unit (APDU) to your service.
+    3 Android will keep forwarding new APDUs from the reader to your service, until either:
+        The NFC reader sends another "SELECT AID" APDU, which the OS resolves to a different service;
+        The NFC link between the NFC reader and your device is broken.
+    In both of these cases, your class's onDeactivated() implementation is called with an argument indicating which of the two happened.
+(3)Service manifest declaration and AID registration
+    1 First, to tell the platform that it is a HCE service implementing a HostApduService interface, your service declaration must contain an intent filter for the SERVICE_INTERFACE action.
+    2 to tell the platform which AIDs groups are requested by this service, a SERVICE_META_DATA <meta-data> tag must be included in the declaration of the service, pointing to an XML resource with additional information about the HCE service.
+    3 Finally, you must set the android:exported attribute to true, and require the "android.permission.BIND_NFC_SERVICE" permission in your service declaration.
+
+8 AID Conflict Resolution:
+The Android platform resolves AID conflicts depending on which category an AID belongs to. Each category may have a different conflict resolution policy.
+
+9 Required assets for payment applications:
+To provide a more visually attractive user experience, HCE payment applications are required to provide an additional asset for their service: a so-called service banner.
+
+10 Screen Off and Lock-screen Behavior:
+(1)HCE services will therefore not work when the screen is off.
+(2)this is controlled by the android:requireDeviceUnlock attribute in the <host-apdu-service> tag of your HCE service
+(3)If you set the android:requireDeviceUnlock attribute to "true" for your HCE service, Android will prompt the user to unlock the device when you tap an NFC reader that selects an AID that is resolved to your service. After unlocking, Android will show a dialog prompting the user to tap again to complete the transaction. 
+
+11 
+(1)Android's HCE implementation is designed to work in parallel with other methods of implementing card emulation, including the use of secure elements.
+(2)This coexistence is based on a principle called "AID routing":
+    1 the NFC controller keeps a routing table that consists of a (finite) list of routing rules.
+    2 Each routing rule contains an AID and a destination.
+    (The destination can either be the host CPU (where Android apps are running), or a connected secure element) 
+(3)The NFC controller typically also contains a default route for APDUs. When an AID is not found in the routing table, the default route is used.
+(4)Android applications that implement a HCE service or that use a secure element don't have to worry about configuring the routing table - that is taking care of by Android automatically.
+
+12 Secure element AID registration:
+Applications using a secure element for card emulation can declare a so-called "off host service" in their manifest.
+(1)The action used in the intent-filter must be set to SERVICE_INTERFACE.
+(2)The meta-data name attribute must be set to SERVICE_META_DATA.
+(3)The meta-data XML file must use the <offhost-apdu-service> root tag.
+(4)The android:requireDeviceUnlock attribute does not apply to off host services, because the host CPU is not involved in the transaction and therefore cannot prevent the secure element from executing transactions when the device is locked.
+(5)The android:apduServiceBanner attribute must be used for off host services that are payment applications as well in order to be selectable as a default payment application.
+
+13 HCE and Security
+(1)The HCE architecture itself provides one core piece of security: because your service is protected by the BIND_NFC_SERVICE system permission, only the OS can bind to and communicate with your service. 
+(2)The core remaining piece is where you get your data that your app sends to the NFC reader:
+    it does not care where the data comes from, it just makes sure that it is safely transported to the NFC controller and out to the NFC reader.
+
+14 The NFC reader can subsequently select the HCE device by sending a SEL_REQ command. The SEL_RES response of the HCE device will at least have the 6th bit (0x20) set, indicating that the device supports ISO-DEP. 
+
+15 The section below provides more details on the individual bytes of the ATS response provided by the NFC controller on a HCE device:
+(1)TL: length of the ATS response. Must not indicate a length greater than 20 bytes.
+(2)T0: bits 5, 6 and 7 must be set on all HCE devices, indicating TA(1), TB(1) and TC(1) are included in the ATS response. Bits 1 to 4 indicate the FSCI, coding the maximum frame size. On HCE devices the value of FSCI must be between 0h and 8h.
+(3)T(A)1: defines bitrates between reader and emulator, and whether they can be asymmetric. There are no bitrate requirements or guarantees for HCE devices.
+(4)T(B)1: bits 1 to 4 indicate the Start-up Frame Guard time Integer (SFGI). On HCE devices, SFGI must be <= 8h. Bits 5 to 8 indicate the Frame Waiting time Integer (FWI) and codes the Frame Waiting Time (FWT). On HCE devices, FWI must be <= 8h.
+(5)T(C)1: bit 5 indicates support for "Advanced Protocol features". HCE devices may or may not support "Advanced Protocol features". Bit 2 indicates support for DID. HCE devices may or may not support DID. Bit 1 indicates support for NAD. HCE devices must not support NAD and set bit 1 to zero.
